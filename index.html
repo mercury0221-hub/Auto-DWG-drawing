@@ -1,0 +1,960 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DWG 자동 작도</title>
+  <style>
+    :root {
+      --bg:        #0d1117;
+      --surface:   #161b22;
+      --surface2:  #21262d;
+      --border:    #30363d;
+      --text:      #e6edf3;
+      --muted:     #8b949e;
+      --accent:    #58a6ff;
+      --success:   #3fb950;
+      --error:     #f85149;
+      --warn:      #d29922;
+      --json-key:  #79c0ff;
+      --json-str:  #a5d6ff;
+      --json-num:  #f2cc60;
+      --json-bool: #ff7b72;
+      --json-null: #8b949e;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 14px;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── Header ─────────────────────────────────────────────── */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 20px;
+      height: 52px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+      gap: 12px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 15px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .brand-icon {
+      width: 24px; height: 24px;
+      background: var(--accent);
+      border-radius: 5px;
+      display: grid;
+      place-items: center;
+      font-size: 12px;
+      color: #0d1117;
+      font-weight: 700;
+    }
+
+    .acad-status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+    .status-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--muted);
+      flex-shrink: 0;
+      transition: background 0.3s;
+    }
+    .status-dot.ok   { background: var(--success); }
+    .status-dot.fail { background: var(--error); }
+    .status-dot.wait { background: var(--warn); animation: pulse 1.2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
+
+    .status-label {
+      font-size: 12.5px;
+      color: var(--muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 280px;
+    }
+    .status-label.ok { color: var(--success); }
+    .status-label.fail { color: var(--error); }
+
+    .icon-btn {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      cursor: pointer;
+      padding: 4px 8px;
+      border-radius: 5px;
+      font-size: 12px;
+      white-space: nowrap;
+      transition: color .15s, border-color .15s;
+    }
+    .icon-btn:hover { color: var(--text); border-color: var(--muted); }
+
+    /* ── Layout ──────────────────────────────────────────────── */
+    .layout {
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    /* ── Left panel ──────────────────────────────────────────── */
+    .left-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 14px;
+      border-right: 1px solid var(--border);
+      overflow-y: auto;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px;
+    }
+
+    .card-label {
+      font-size: 10.5px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .9px;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+
+    textarea {
+      width: 100%;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font: 13px/1.55 inherit;
+      padding: 9px 11px;
+      resize: vertical;
+      min-height: 80px;
+      outline: none;
+      transition: border-color .2s;
+    }
+    textarea:focus { border-color: var(--accent); }
+    textarea::placeholder { color: var(--muted); }
+
+    /* 예시 칩 */
+    .example-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      margin-top: 8px;
+    }
+    .chip {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 3px 9px;
+      font-size: 11px;
+      color: var(--muted);
+      cursor: pointer;
+      transition: color .15s, border-color .15s;
+      white-space: nowrap;
+    }
+    .chip:hover { color: var(--accent); border-color: var(--accent); }
+
+    /* 모델 선택 */
+    .model-opts {
+      display: flex;
+      gap: 6px;
+      margin-top: 10px;
+    }
+    .radio-pill { flex: 1; }
+    .radio-pill input[type="radio"] { display: none; }
+    .radio-pill label {
+      display: block;
+      text-align: center;
+      padding: 5px 6px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 11.5px;
+      color: var(--muted);
+      transition: all .15s;
+      white-space: nowrap;
+    }
+    .radio-pill input:checked + label {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: rgba(88,166,255,.1);
+    }
+
+    /* 작도 버튼 */
+    .draw-btn {
+      width: 100%;
+      margin-top: 11px;
+      padding: 10px;
+      background: var(--accent);
+      color: #0d1117;
+      border: none;
+      border-radius: 6px;
+      font-size: 13.5px;
+      font-weight: 700;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      transition: opacity .2s, background .2s;
+    }
+    .draw-btn:hover:not(:disabled) { opacity: .85; }
+    .draw-btn:disabled { opacity: .5; cursor: not-allowed; }
+    .draw-btn.success { background: var(--success); }
+    .draw-btn.error   { background: var(--error); color: #fff; }
+
+    .spinner {
+      width: 13px; height: 13px;
+      border: 2px solid rgba(0,0,0,.25);
+      border-top-color: #0d1117;
+      border-radius: 50%;
+      animation: spin .65s linear infinite;
+      display: none;
+    }
+    .draw-btn.loading .spinner { display: block; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* 도면 정보 그리드 */
+    .info-grid {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 4px 10px;
+      font-size: 12.5px;
+    }
+    .info-k { color: var(--muted); white-space: nowrap; }
+    .info-v { color: var(--text); font-family: 'Consolas', monospace; word-break: break-all; }
+
+    /* 모델 뱃지 */
+    .model-badge {
+      font-family: 'Consolas', monospace;
+      font-size: 12px;
+      color: var(--accent);
+      background: rgba(88,166,255,.08);
+      border: 1px solid rgba(88,166,255,.25);
+      border-radius: 5px;
+      padding: 5px 9px;
+      word-break: break-all;
+      line-height: 1.4;
+    }
+
+    /* 직접 입력 행 */
+    .custom-model-row {
+      display: flex;
+      gap: 5px;
+      margin-top: 6px;
+    }
+    .custom-model-input {
+      flex: 1;
+      min-width: 0;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      color: var(--text);
+      font-size: 11.5px;
+      padding: 5px 8px;
+      font-family: 'Consolas', monospace;
+    }
+    .custom-model-input:focus { outline: none; border-color: var(--accent); }
+    .custom-model-input::placeholder { color: var(--muted); }
+
+    .search-icon-btn {
+      flex-shrink: 0;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      color: var(--muted);
+      cursor: pointer;
+      padding: 5px 9px;
+      font-size: 13px;
+      transition: all .15s;
+      white-space: nowrap;
+    }
+    .search-icon-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+    /* 모델 검색 오버레이 */
+    .model-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,.65);
+      z-index: 200;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .model-panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      width: 520px;
+      max-width: 95vw;
+      max-height: 72vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      box-shadow: 0 20px 60px rgba(0,0,0,.6);
+    }
+    .model-panel-header {
+      display: flex;
+      align-items: center;
+      padding: 13px 16px;
+      border-bottom: 1px solid var(--border);
+      gap: 10px;
+    }
+    .model-panel-title { font-size: 13px; font-weight: 600; flex: 1; }
+    .model-panel-count { font-size: 11px; color: var(--muted); }
+    .model-panel-filter { padding: 9px 12px; border-bottom: 1px solid var(--border); }
+    .model-filter-input {
+      width: 100%;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      color: var(--text);
+      font-size: 13px;
+      padding: 6px 10px;
+    }
+    .model-filter-input:focus { outline: none; border-color: var(--accent); }
+    .model-filter-input::placeholder { color: var(--muted); }
+
+    .model-list { overflow-y: auto; flex: 1; }
+    .model-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 15px;
+      cursor: pointer;
+      border-bottom: 1px solid rgba(48,54,61,.5);
+      transition: background .1s;
+    }
+    .model-item:hover    { background: var(--surface2); }
+    .model-item.selected { background: rgba(88,166,255,.12); }
+    .model-item-id {
+      flex: 1;
+      font-family: 'Consolas', monospace;
+      font-size: 12px;
+      color: var(--accent);
+      min-width: 0;
+      word-break: break-all;
+      line-height: 1.4;
+    }
+    .model-item-pills { display: flex; gap: 4px; flex-shrink: 0; }
+    .pill {
+      font-size: 10px;
+      padding: 1px 5px;
+      border-radius: 3px;
+      border: 1px solid;
+      white-space: nowrap;
+    }
+    .pill-ctx    { border-color: var(--muted); color: var(--muted); }
+    .pill-vision { border-color: var(--warn);  color: var(--warn); }
+
+    /* ── Right panel ─────────────────────────────────────────── */
+    .right-panel {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .pane {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      border-bottom: 1px solid var(--border);
+    }
+    .pane:last-child { border-bottom: none; }
+    .log-pane  { flex: 1.4; }
+    .json-pane { flex: 1; }
+
+    .pane-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 7px 14px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      flex-shrink: 0;
+    }
+    .pane-title {
+      font-size: 10.5px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .9px;
+      color: var(--muted);
+    }
+    .pane-actions { display: flex; gap: 5px; }
+
+    /* 로그 */
+    .log-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px 14px;
+      font-family: 'Consolas', 'Fira Mono', monospace;
+      font-size: 12.5px;
+      line-height: 1.65;
+    }
+    .log-line { white-space: pre-wrap; word-break: break-all; }
+    .log-line.info    { color: #c9d1d9; }
+    .log-line.system  { color: var(--accent); }
+    .log-line.success { color: var(--success); }
+    .log-line.error   { color: var(--error); }
+    .log-line.warn    { color: var(--warn); }
+    .log-line.dim     { color: var(--muted); font-style: italic; }
+
+    /* JSON */
+    .json-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px 14px;
+    }
+    pre {
+      font-family: 'Consolas', 'Fira Mono', monospace;
+      font-size: 12.5px;
+      line-height: 1.65;
+      white-space: pre;
+    }
+    .jk  { color: var(--json-key); }
+    .js  { color: var(--json-str); }
+    .jn  { color: var(--json-num); }
+    .jb  { color: var(--json-bool); }
+    .jnl { color: var(--json-null); }
+    .jp  { color: var(--muted); font-style: italic; }
+
+    /* 스크롤바 */
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+  </style>
+</head>
+<body>
+
+<!-- ── Header ───────────────────────────────────────────────────────────── -->
+<header>
+  <div class="brand">
+    <div class="brand-icon">DW</div>
+    DWG 자동 작도
+  </div>
+  <div class="acad-status">
+    <div class="status-dot wait" id="sDot"></div>
+    <span class="status-label" id="sLabel">AutoCAD 확인 중...</span>
+    <button class="icon-btn" onclick="checkStatus()" title="상태 새로고침">↺ 새로고침</button>
+  </div>
+</header>
+
+<!-- ── Layout ───────────────────────────────────────────────────────────── -->
+<div class="layout">
+
+  <!-- 왼쪽 패널 -->
+  <div class="left-panel">
+
+    <!-- 입력 카드 -->
+    <div class="card">
+      <div class="card-label">설계 입력</div>
+      <textarea id="inputText"
+        placeholder="예: 폭 3m 높이 2m 사각형 방 그려줘"
+        onkeydown="onTextareaKey(event)"></textarea>
+
+      <div class="example-chips" id="chips"></div>
+
+      <div class="model-opts">
+        <div class="radio-pill">
+          <input type="radio" name="modelMode" id="mFree" value="free" checked onchange="onModelModeChange()">
+          <label for="mFree">무료 자동선택</label>
+        </div>
+        <div class="radio-pill">
+          <input type="radio" name="modelMode" id="mAuto" value="auto" onchange="onModelModeChange()">
+          <label for="mAuto">openrouter/auto</label>
+        </div>
+        <div class="radio-pill">
+          <input type="radio" name="modelMode" id="mCustom" value="custom" onchange="onModelModeChange()">
+          <label for="mCustom">직접 입력</label>
+        </div>
+      </div>
+      <!-- 직접 입력 행 — 'custom' 선택 시 표시 -->
+      <div class="custom-model-row" id="customModelRow" style="display:none">
+        <input type="text" id="customModelInput" class="custom-model-input"
+               placeholder="예: nvidia/nemotron-3-super-120b-a12b:free">
+        <button class="search-icon-btn" onclick="openModelSearch()" title="무료 모델 검색 (OpenRouter)">🔍 검색</button>
+      </div>
+
+      <button class="draw-btn" id="drawBtn" onclick="startDraw()">
+        <div class="spinner"></div>
+        <span id="drawBtnText">▶ 작도 실행</span>
+      </button>
+      <div style="font-size:11px;color:var(--muted);margin-top:6px;text-align:center">
+        Ctrl + Enter 로도 실행
+      </div>
+    </div>
+
+    <!-- 도면 정보 카드 (연결 시 표시) -->
+    <div class="card" id="infoCard" style="display:none">
+      <div class="card-label">도면 정보</div>
+      <div class="info-grid" id="infoGrid"></div>
+    </div>
+
+    <!-- 선택 모델 카드 (작도 후 표시) -->
+    <div class="card" id="modelCard" style="display:none">
+      <div class="card-label">선택된 모델</div>
+      <div class="model-badge" id="modelBadge"></div>
+    </div>
+
+  </div>
+
+  <!-- 오른쪽 패널 -->
+  <div class="right-panel">
+
+    <!-- 로그 -->
+    <div class="pane log-pane">
+      <div class="pane-header">
+        <span class="pane-title">실행 로그</span>
+        <div class="pane-actions">
+          <button class="icon-btn" onclick="clearLog()">지우기</button>
+        </div>
+      </div>
+      <div class="log-body" id="logBody">
+        <div class="log-line dim">실행 로그가 여기에 표시됩니다.</div>
+      </div>
+    </div>
+
+    <!-- JSON 출력 -->
+    <div class="pane json-pane">
+      <div class="pane-header">
+        <span class="pane-title">JSON 출력</span>
+        <div class="pane-actions">
+          <button class="icon-btn" id="copyBtn" onclick="copyJson()">복사</button>
+        </div>
+      </div>
+      <div class="json-body">
+        <pre id="jsonOutput"><span class="jp">작도 후 JSON이 여기에 표시됩니다.</span></pre>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+// ─── 상수 ────────────────────────────────────────────────────────────────────
+
+const EXAMPLES = [
+  '폭 3m 높이 2m 사각형 방 그려줘',
+  '5000×3000mm 직사각형',
+  '가로 10m 세로 5m 건물 외곽선',
+];
+
+let _currentJson = '';
+let _logHasContent = false;
+
+// ─── 초기화 ──────────────────────────────────────────────────────────────────
+
+(function init() {
+  // 예시 칩 생성
+  const chips = document.getElementById('chips');
+  EXAMPLES.forEach(ex => {
+    const c = document.createElement('span');
+    c.className = 'chip';
+    c.textContent = ex;
+    c.onclick = () => {
+      document.getElementById('inputText').value = ex;
+      document.getElementById('inputText').focus();
+    };
+    chips.appendChild(c);
+  });
+
+  checkStatus();
+  setInterval(checkStatus, 6000);
+})();
+
+// ─── AutoCAD 상태 ─────────────────────────────────────────────────────────────
+
+async function checkStatus() {
+  setStatusDot('wait', 'AutoCAD 확인 중...');
+  try {
+    const res = await fetch('/api/status');
+    const d = await res.json();
+    if (d.connected) {
+      setStatusDot('ok', d.doc_name || 'AutoCAD 연결됨');
+      renderInfo(d);
+    } else {
+      setStatusDot('fail', d.error || 'AutoCAD 연결 안됨');
+      document.getElementById('infoCard').style.display = 'none';
+    }
+  } catch {
+    setStatusDot('fail', '서버 응답 없음');
+  }
+}
+
+function setStatusDot(cls, text) {
+  const dot   = document.getElementById('sDot');
+  const label = document.getElementById('sLabel');
+  dot.className   = 'status-dot ' + cls;
+  label.className = 'status-label ' + cls;
+  label.textContent = text;
+}
+
+function renderInfo(d) {
+  const rows = [
+    ['파일', d.doc_name],
+    ['단위', d.units],
+    ['범위', d.extents],
+  ];
+  document.getElementById('infoGrid').innerHTML = rows.map(([k, v]) =>
+    `<span class="info-k">${k}</span><span class="info-v">${esc(v || '-')}</span>`
+  ).join('');
+  document.getElementById('infoCard').style.display = '';
+}
+
+// ─── 작도 실행 ────────────────────────────────────────────────────────────────
+
+async function startDraw() {
+  const text = document.getElementById('inputText').value.trim();
+  if (!text) { document.getElementById('inputText').focus(); return; }
+
+  // 모델 모드에 따라 페이로드 구성
+  const mode = document.querySelector('input[name="modelMode"]:checked').value;
+  const payload = {text};
+  if (mode === 'auto') {
+    payload.auto = true;
+  } else if (mode === 'custom') {
+    const cm = (document.getElementById('customModelInput').value || '').trim();
+    if (cm) payload.model = cm;
+  }
+
+  setBtn('loading', '처리 중...');
+  clearLog();
+  clearJson();
+  document.getElementById('modelCard').style.display = 'none';
+
+  try {
+    const res = await fetch('/api/draw', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({error: res.statusText}));
+      appendLog('오류: ' + (err.error || res.statusText), 'error');
+      setBtn('error', '✗ 실패');
+      resetBtnLater();
+      return;
+    }
+
+    // SSE 스트림 읽기 (fetch + ReadableStream, EventSource는 GET 전용)
+    const reader  = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+
+      buf += decoder.decode(value, {stream: true});
+      // SSE 이벤트는 \n\n 으로 구분
+      const parts = buf.split('\n\n');
+      buf = parts.pop();  // 마지막 미완성 조각 유지
+
+      for (const part of parts) {
+        for (const line of part.split('\n')) {
+          if (line.startsWith('data: ')) {
+            try { dispatch(JSON.parse(line.slice(6))); } catch (_) {}
+          }
+        }
+      }
+    }
+  } catch (e) {
+    appendLog('연결 오류: ' + e.message, 'error');
+    setBtn('error', '✗ 오류');
+    resetBtnLater();
+  }
+}
+
+// ─── 이벤트 디스패치 ─────────────────────────────────────────────────────────
+
+function dispatch(ev) {
+  switch (ev.type) {
+    case 'log':
+      appendLog(ev.payload);
+      break;
+    case 'json':
+      _currentJson = ev.payload;
+      renderJson(ev.payload);
+      break;
+    case 'model':
+      document.getElementById('modelBadge').textContent = ev.payload;
+      document.getElementById('modelCard').style.display = '';
+      break;
+    case 'success':
+      appendLog(ev.payload, 'success');
+      setBtn('success', '✓ 완료');
+      resetBtnLater(3000);
+      checkStatus();
+      break;
+    case 'error':
+      appendLog('오류: ' + ev.payload, 'error');
+      setBtn('error', '✗ 실패');
+      resetBtnLater(3000);
+      break;
+    case 'done':
+      // 파이프라인 종료 신호 — 버튼이 아직 loading이면 복구
+      const btn = document.getElementById('drawBtn');
+      if (btn.classList.contains('loading')) {
+        setBtn('idle', '▶ 작도 실행');
+      }
+      break;
+  }
+}
+
+// ─── 로그 ────────────────────────────────────────────────────────────────────
+
+function appendLog(text, cls) {
+  const body = document.getElementById('logBody');
+  if (!_logHasContent) { body.innerHTML = ''; _logHasContent = true; }
+
+  const line = document.createElement('div');
+  line.className = 'log-line ' + (cls || logClass(text));
+  line.textContent = text;
+  body.appendChild(line);
+  body.scrollTop = body.scrollHeight;
+}
+
+function logClass(text) {
+  if (!text) return 'dim';
+  if (/\[오류\]|오류:|✗/.test(text))                          return 'error';
+  if (/\[경고\]/.test(text))                                   return 'warn';
+  if (/\[완료\]|✓/.test(text))                                 return 'success';
+  if (/\[연결\]|\[LLM\]|\[모델\]|\[검증\]|\[작도\]/.test(text)) return 'system';
+  return 'info';
+}
+
+function clearLog() {
+  document.getElementById('logBody').innerHTML =
+    '<div class="log-line dim">실행 로그가 여기에 표시됩니다.</div>';
+  _logHasContent = false;
+}
+
+// ─── JSON 뷰어 ───────────────────────────────────────────────────────────────
+
+function renderJson(jsonStr) {
+  document.getElementById('jsonOutput').innerHTML = syntaxHighlight(jsonStr);
+}
+
+function clearJson() {
+  _currentJson = '';
+  document.getElementById('jsonOutput').innerHTML =
+    '<span class="jp">작도 후 JSON이 여기에 표시됩니다.</span>';
+}
+
+/** JSON 토크나이저 기반 구문 강조 — regex보다 안정적 */
+function syntaxHighlight(src) {
+  let out = '';
+  let i = 0;
+
+  while (i < src.length) {
+    const ch = src[i];
+
+    // 문자열
+    if (ch === '"') {
+      let j = i + 1;
+      while (j < src.length) {
+        if (src[j] === '\\') { j += 2; continue; }
+        if (src[j] === '"')  { j++;    break; }
+        j++;
+      }
+      const token = src.slice(i, j);
+      // 다음 의미 있는 문자가 ':'면 key
+      let k = j;
+      while (k < src.length && (src[k] === ' ' || src[k] === '\t')) k++;
+      const isKey = src[k] === ':';
+      out += `<span class="${isKey ? 'jk' : 'js'}">${esc(token)}</span>`;
+      i = j;
+      continue;
+    }
+
+    // 숫자 (음수 포함)
+    if (ch === '-' || (ch >= '0' && ch <= '9')) {
+      let j = i;
+      if (src[j] === '-') j++;
+      while (j < src.length && /[\d.eE+\-]/.test(src[j])) j++;
+      out += `<span class="jn">${src.slice(i, j)}</span>`;
+      i = j;
+      continue;
+    }
+
+    // 리터럴: true / false / null
+    if (src.startsWith('true',  i)) { out += '<span class="jb">true</span>';   i += 4; continue; }
+    if (src.startsWith('false', i)) { out += '<span class="jb">false</span>';  i += 5; continue; }
+    if (src.startsWith('null',  i)) { out += '<span class="jnl">null</span>';  i += 4; continue; }
+
+    // 줄바꿈 / 기타 문자
+    out += ch === '\n' ? '\n' : esc(ch);
+    i++;
+  }
+  return out;
+}
+
+async function copyJson() {
+  if (!_currentJson) return;
+  try {
+    await navigator.clipboard.writeText(_currentJson);
+    const btn = document.getElementById('copyBtn');
+    btn.textContent = '복사됨 ✓';
+    setTimeout(() => { btn.textContent = '복사'; }, 1500);
+  } catch (_) {}
+}
+
+// ─── 버튼 상태 ───────────────────────────────────────────────────────────────
+
+function setBtn(state, label) {
+  const btn = document.getElementById('drawBtn');
+  const txt = document.getElementById('drawBtnText');
+  btn.className = 'draw-btn ' + (state === 'idle' ? '' : state);
+  btn.disabled  = state === 'loading';
+  txt.textContent = label;
+}
+
+function resetBtnLater(ms = 2500) {
+  setTimeout(() => setBtn('idle', '▶ 작도 실행'), ms);
+}
+
+// ─── 유틸 ────────────────────────────────────────────────────────────────────
+
+function esc(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+// ─── 모델 검색 ───────────────────────────────────────────────────────────────
+
+let _allModels = [];   // OpenRouter 무료 모델 캐시
+
+function onModelModeChange() {
+  const mode = document.querySelector('input[name="modelMode"]:checked').value;
+  document.getElementById('customModelRow').style.display = mode === 'custom' ? '' : 'none';
+}
+
+async function openModelSearch() {
+  document.getElementById('modelOverlay').style.display = '';
+
+  if (_allModels.length === 0) {
+    document.getElementById('modelList').innerHTML =
+      '<div class="log-line dim" style="padding:16px">OpenRouter에서 무료 모델 목록 로드 중…</div>';
+    try {
+      const res  = await fetch('/api/models');
+      const data = await res.json();
+      if (data.error) {
+        document.getElementById('modelList').innerHTML =
+          `<div class="log-line error" style="padding:16px">오류: ${esc(data.error)}</div>`;
+        return;
+      }
+      _allModels = data.models || [];
+      document.getElementById('modelPanelCount').textContent =
+        `무료 모델 ${_allModels.length}개`;
+    } catch (e) {
+      document.getElementById('modelList').innerHTML =
+        `<div class="log-line error" style="padding:16px">서버 응답 없음: ${esc(e.message)}</div>`;
+      return;
+    }
+  }
+
+  document.getElementById('modelFilterInput').value = '';
+  renderModelList(_allModels);
+  setTimeout(() => document.getElementById('modelFilterInput').focus(), 60);
+}
+
+function closeModelSearch() {
+  document.getElementById('modelOverlay').style.display = 'none';
+}
+
+function filterModels(q) {
+  const lower = q.toLowerCase();
+  renderModelList(lower ? _allModels.filter(m => m.id.toLowerCase().includes(lower)) : _allModels);
+}
+
+function renderModelList(models) {
+  const current = (document.getElementById('customModelInput').value || '').trim();
+  const list = document.getElementById('modelList');
+
+  if (!models.length) {
+    list.innerHTML = '<div class="log-line dim" style="padding:14px">검색 결과 없음</div>';
+    return;
+  }
+
+  list.innerHTML = models.map(m => {
+    const ctx     = m.context >= 1000 ? Math.round(m.context / 1000) + 'k' : (m.context || '?');
+    const vision  = m.modality && m.modality.includes('image');
+    const sel     = m.id === current ? ' selected' : '';
+    return `<div class="model-item${sel}" onclick="selectModel(${JSON.stringify(m.id)})">
+      <span class="model-item-id">${esc(m.id)}</span>
+      <span class="model-item-pills">
+        ${vision ? '<span class="pill pill-vision">vision</span>' : ''}
+        <span class="pill pill-ctx">${esc(String(ctx))}</span>
+      </span>
+    </div>`;
+  }).join('');
+}
+
+function selectModel(id) {
+  document.getElementById('customModelInput').value = id;
+  // 직접 입력 라디오 자동 선택
+  document.getElementById('mCustom').checked = true;
+  onModelModeChange();
+  closeModelSearch();
+}
+
+function onTextareaKey(e) {
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    startDraw();
+  }
+}
+</script>
+
+<!-- ── 모델 검색 오버레이 ─────────────────────────────────────────────────── -->
+<div class="model-overlay" id="modelOverlay" style="display:none"
+     onclick="if(event.target===this)closeModelSearch()">
+  <div class="model-panel">
+    <div class="model-panel-header">
+      <span class="model-panel-title">OpenRouter 무료 모델 목록</span>
+      <span class="model-panel-count" id="modelPanelCount"></span>
+      <button class="icon-btn" onclick="closeModelSearch()" style="margin-left:6px">✕</button>
+    </div>
+    <div class="model-panel-filter">
+      <input type="text" class="model-filter-input" id="modelFilterInput"
+             placeholder="모델 ID 검색 (예: nemotron, llama, gemma…)"
+             oninput="filterModels(this.value)">
+    </div>
+    <div class="model-list" id="modelList">
+      <div class="log-line dim" style="padding:16px">불러오는 중...</div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

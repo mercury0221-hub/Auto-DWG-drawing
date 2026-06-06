@@ -1,0 +1,19 @@
+# API 키 — 절대 커밋 금지
+.env
+key.enc
+
+# AutoCAD 임시/잠금 파일
+*.bak
+*.dwl
+*.dwl2
+
+# 로그
+*.log
+
+# Python 캐시
+__pycache__/
+*.pyc
+*.pyo
+
+# Claude 프로젝트 데이터
+.claude/
