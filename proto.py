@@ -134,8 +134,42 @@ def get_free_model(api_key: str) -> str:
         return DEFAULT_MODEL
 
 
+def _extract_json(raw: str) -> dict:
+    """
+    모델 응답 문자열에서 JSON 객체를 추출해 dict로 반환.
+    무료 모델이 흔히 붙이는 마크다운 펜스/설명문에 강건하게 대응한다.
+    실패 시 json.JSONDecodeError 발생.
+    """
+    import re
+
+    if not raw or not raw.strip():
+        raise json.JSONDecodeError("빈 응답", raw or "", 0)
+
+    s = raw.strip()
+
+    # 1. ```json ... ``` / ``` ... ``` 코드펜스 제거
+    fence = re.search(r"```(?:json)?\s*(.+?)```", s, re.DOTALL | re.IGNORECASE)
+    if fence:
+        s = fence.group(1).strip()
+
+    # 2. 그대로 파싱 시도
+    try:
+        return json.loads(s)
+    except json.JSONDecodeError:
+        pass
+
+    # 3. 첫 '{' ~ 마지막 '}' 구간만 잘라 재시도 (설명문 앞뒤 제거)
+    start = s.find("{")
+    end = s.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        return json.loads(s[start:end + 1])
+
+    # 모두 실패 → 원본으로 에러 발생
+    return json.loads(s)
+
+
 def _call_llm(client: OpenAI, model: str, text: str, summary: str) -> dict:
-    """LLM 1콜. 순수 JSON dict를 반환. 실패 시 ValueError."""
+    """LLM 1콜. 순수 JSON dict를 반환. 실패 시 JSONDecodeError."""
     user_msg = (
         f"도면 컨텍스트:\n{summary}\n\n"
         f"요청: {text}"
@@ -147,48 +181,18 @@ def _call_llm(client: OpenAI, model: str, text: str, summary: str) -> dict:
             {"role": "user", "content": user_msg},
         ],
         response_format={"type": "json_object"},
-        max_tokens=512,
+        max_tokens=2048,
         temperature=0,
     )
-    raw = resp.choices[0].message.content.strip()
-    return json.loads(raw)
+    raw = (resp.choices[0].message.content or "").strip()
+    # 모델이 실제로 반환한 원문을 로그로 노출 (파싱 실패 디버깅용)
+    preview = raw if len(raw) <= 500 else raw[:500] + "…(생략)"
+    print(f"[LLM 원문] {preview if preview else '(빈 응답)'}")
+    return _extract_json(raw)
 
 
-def design(text: str, summary: str, client: OpenAI, model: str) -> dict:
-    """
-    자연어 → JSON 도형 명세.
-    파싱 실패 시 1회 재시도. 그래도 실패하면 RuntimeError.
-    모델 429/사용불가 시 다음 무료 모델로 1회 폴백.
-    """
-    fallback_done = False
-
-    for attempt in range(2):  # 최대 2회(초기 + 재시도 1회)
-        try:
-            data = _call_llm(client, model, text, summary)
-            return data
-        except json.JSONDecodeError as e:
-            if attempt == 0:
-                print(f"[경고] JSON 파싱 실패, 1회 재시도... ({e})")
-                continue
-            raise RuntimeError(f"LLM 응답 파싱 2회 모두 실패: {e}") from e
-        except Exception as e:
-            err_str = str(e)
-            # 429 또는 모델 사용 불가 → 폴백 모델로 1회 시도
-            if ("429" in err_str or "unavailable" in err_str.lower()) and not fallback_done:
-                fallback_done = True
-                fallback = _next_free_model(client.api_key, model)
-                if fallback:
-                    print(f"[폴백] {model} 사용 불가 → {fallback} 시도")
-                    model = fallback
-                    attempt = -1  # 루프 카운터 리셋 효과 없음, 다음 반복으로
-                    continue
-            raise RuntimeError(f"LLM 호출 실패: {e}") from e
-
-    raise RuntimeError("LLM 호출 최대 시도 초과")
-
-
-def _next_free_model(api_key: str, current_model: str) -> str | None:
-    """current_model을 제외한 다음 무료 모델 반환. 없으면 None."""
+def _free_models(api_key: str) -> list:
+    """무료 모델 id 목록(알파벳 정렬). 실패 시 빈 리스트."""
     try:
         resp = requests.get(
             MODELS_ENDPOINT,
@@ -197,19 +201,45 @@ def _next_free_model(api_key: str, current_model: str) -> str | None:
         )
         resp.raise_for_status()
         models = resp.json().get("data", [])
-        free = sorted(
-            [
-                m["id"] for m in models
-                if (
-                    m.get("pricing", {}).get("prompt") == "0"
-                    and m.get("pricing", {}).get("completion") == "0"
-                    and m.get("id") != current_model
-                )
-            ]
+        return sorted(
+            m["id"] for m in models
+            if (
+                m.get("pricing", {}).get("prompt") == "0"
+                and m.get("pricing", {}).get("completion") == "0"
+            )
         )
-        return free[0] if free else None
     except Exception:
-        return None
+        return []
+
+
+def design(text: str, summary: str, client: OpenAI, model: str) -> dict:
+    """
+    자연어 → JSON 도형 명세.
+    지정 모델부터 시작해, 파싱 실패 또는 사용 불가(429 등) 시
+    다른 무료 모델로 순차 폴백한다. 최대 MAX_ATTEMPTS개 모델을 시도하며
+    모두 실패하면 RuntimeError.
+    """
+    MAX_ATTEMPTS = 4
+
+    # 후보 모델: 지정 모델 우선 + 무료 모델 목록(중복 제거)
+    pool = _free_models(client.api_key)
+    candidates = [model] + [m for m in pool if m != model]
+    candidates = candidates[:MAX_ATTEMPTS]
+
+    last_err = None
+    for idx, cur in enumerate(candidates):
+        if idx > 0:
+            print(f"[모델 전환] {cur} 시도 ({idx + 1}/{len(candidates)})")
+        try:
+            return _call_llm(client, cur, text, summary)
+        except json.JSONDecodeError as e:
+            last_err = e
+            print(f"[경고] JSON 파싱 실패 ({cur}): {e}")
+        except Exception as e:
+            last_err = e
+            print(f"[경고] 모델 호출 실패 ({cur}): {e}")
+
+    raise RuntimeError(f"모든 모델 시도 실패 — 마지막 오류: {last_err}")
 
 
 # ─── AutoCAD 연결 ─────────────────────────────────────────────────────────────
@@ -333,8 +363,8 @@ def summarize_drawing(acad) -> str:
                 if layer in WALL_LAYERS:
                     if obj == "AcDbLine":
                         sp, ep = ent.StartPoint, ent.EndPoint
-                        wall_xs += [sp[0], ep[0]]
-                        wall_ys += [sp[1], ep[1]]
+                        wall_xs.extend([sp[0], ep[0]])
+                        wall_ys.extend([sp[1], ep[1]])
                     elif obj in ("AcDbPolyline", "AcDb2dPolyline"):
                         coords = list(ent.Coordinates)
                         for i in range(0, len(coords) - 1, 2):
